@@ -1,0 +1,161 @@
+---
+title: "training"
+author: "Courtney  Willey"
+format: html
+editor: visual
+---
+
+```{r setup}
+
+# install.packages("here")
+library(here)
+# install.packages("tidyverse")
+library(tidyverse)
+# install.packages("ggpubr")
+library(ggpubr)
+
+```
+
+## DO mNPC Data
+```{r load_data}
+
+load(here("data","DO_mNPC_expr_data_02152023.RData"))
+
+```
+
+Exercises:
+
+1. Pull the expression of Fer and plot a histogram. 
+```{r}
+
+npc.genes %>%
+  head()
+
+fer_annot <- npc.genes %>% filter( mgi_symbol == "Fer")
+
+fer_expr <- expr.npc_rna[,fer_annot$ensembl_gene_id, drop = FALSE] %>%
+  as_tibble( rownames = "sampleid") %>%
+  inner_join( ., covarTidy.npc_rna, by= "sampleid")
+
+fer_expr %>%
+  ggplot()+
+  aes(
+    x = `ENSMUSG00000000127`,
+  )+
+  geom_histogram()
+
+```
+2. Color the histogram by sexes.
+```{r}
+
+fer_expr %>%
+  ggplot()+
+  aes(
+    x = `ENSMUSG00000000127`,
+    col = sex,
+    fill = sex,
+  )+
+  geom_histogram()
+
+```
+  
+3. Compare the expression of Fer to Hspb3. Make a scatterplot.
+```{r}
+
+npc.genes %>%
+  head()
+
+hspb3_fer_annot <- npc.genes %>% filter( mgi_symbol %in% c("Hspb3","Fer" ))
+
+hspb3_fer_expr <- expr.npc_rna[,hspb3_fer_annot$ensembl_gene_id, drop = FALSE] %>%
+  as_tibble( rownames = "sampleid") %>%
+  inner_join( ., covarTidy.npc_rna, by= "sampleid")
+
+hspb3_fer_expr %>%
+  ggplot()+
+  aes(
+    x = `ENSMUSG00000051456`,
+    col = sex,
+    fill = sex
+  )+
+  geom_histogram()
+
+
+ggscatter(hspb3_fer_expr,
+  x = "ENSMUSG00000000127", y = "ENSMUSG00000051456", size = 3, alpha = 0.6,
+  add = "reg.line", # Add regression line
+  conf.int = TRUE, # Add confidence interval
+  add.params = list(color = "purple", fill = "purple"), show.legend.text = FALSE
+  #yscale = "log10", xscale = "log10" 
+  ) +
+  stat_cor(method = "pearson", label.x = 500, label.y = 55) + # Add correlation coefficient
+  xlab("Fer Expression") +
+  ylab("Hspb3 Expression") +
+  theme_classic(base_size = 14) +
+  rremove("legend") -> fer_hspb3 
+
+ggpar(fer_hspb3, xlim = c(500,1500), ylim = c(-1,70))
+
+```
+4. What is the correlation between Fer and Hspb3?
+```{r}
+
+hspb3_annot <- npc.genes %>% filter( mgi_symbol %in% c("Hspb3"))
+
+hspb3_expr <- expr.npc_rna[,hspb3_annot$ensembl_gene_id, drop = FALSE] %>%
+  as_tibble( rownames = "sampleid") %>%
+  inner_join( ., covarTidy.npc_rna, by= "sampleid")
+
+cor <- cor.test(fer_expr$ENSMUSG00000000127,hspb3_expr$ENSMUSG00000051456, method=c("pearson"))
+cor
+
+```
+5. What are the 100 genes with highest variance?
+
+```{r}
+
+var.npc_rna <- expr.npc_rna %>%
+  as_tibble(.) %>%
+  summarise_all(list(~ var(., na.rm = T))) %>%
+  t() %>%
+  as.data.frame() %>%
+  rownames_to_column() %>%
+  rename(ensembl_gene_id = rowname, var = V1) %>%
+  arrange(desc(var))
+
+head(var.npc_rna, n = 100)
+
+```
+
+6. Compare the expression of most variable 100 genes across the sexes and make a boxplot showing the results.
+```{r}
+
+mostvariable = head(var.npc_rna, n = 100)
+expr.npc_rna[,mostvariable$ensembl_gene_id] %>%
+as_tibble( rownames = "sampleid") %>%
+  inner_join( ., covarTidy.npc_rna, by= "sampleid") %>%
+  pivot_longer(.,cols = starts_with("ENSMUSG"), names_to = "ensembl_gene_id", values_to = "gene_expression") %>%
+  ggplot() + 
+  aes(x = sex, y = gene_expression) +
+  theme_minimal()+
+  geom_boxplot() + 
+  scale_y_log10() 
+
+```
+
+7. Show expression of genes with different biotypes using a boxplot.
+
+```{r}
+
+expr.npc_rna[,mostvariable$ensembl_gene_id] %>%
+  as_tibble( rownames = "sampleid") %>%
+  pivot_longer(.,cols = starts_with("ENSMUSG"), names_to = "ensembl_gene_id", values_to = "gene_expression") %>%
+  inner_join(x = ., y = npc.genes, by = "ensembl_gene_id") %>%
+  ggplot() + 
+  aes(x = gene_biotype, y = gene_expression) +
+  geom_boxplot() +
+  scale_y_log10() +
+  theme(axis.text.x = element_text (angle = 45, vjust = 1, hjust = 1)) 
+
+
+```
