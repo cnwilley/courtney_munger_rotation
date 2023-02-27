@@ -1,0 +1,120 @@
+---
+title: "QTL Mapping Gbx2"
+author: "Courtney  Willey"
+format: html
+editor: visual
+---
+
+First, I will install some packages.
+
+```{r  eval=FALSE}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("GenomicRanges")
+
+install.packages("qtl2")
+
+install.packages("devtools")
+    devtools::install_github("simecek/intermediate")
+    
+devtools::install_github("wesleycrouse/bmediatR", build_vignettes = TRUE)
+```
+
+Second, I will load my setup.
+
+```{r setup}
+# for data handling + plotting
+library(tidyverse)
+library(ggpubr)
+
+# for qtl mapping+ annotation + mediation
+library(qtl2)
+library(GenomicRanges)
+library(intermediate)
+library(bmediatR)
+
+# set relative path to Rstudio project
+library(here)
+
+# re-assign some functions explicitly
+select <- dplyr::select 
+rename <- dplyr::rename 
+summarise <- dplyr::summarise
+```
+
+Third, I will load my data.
+
+```{r load_data}
+# expression data
+load( here("data","DO_mNPC_expr_data_02152023.RData")) # need this for gene annotations! 
+
+# mapping data
+load( here("data","DO_mNPC_paired_eQTL_forMapping.RData")) # has all objects needed for mapping.
+```
+
+Below, is an eQTL mapping example. This is an eQTL scan using the transcript abundance of \*\*Gbx2\*\* in DO mNPCs. The first step is transforming the upper quantile normalized gene expression counts to rank normal scores using \`rankZ()\` function.
+
+```{r eQTL_mapping}
+# Get gene details usinge dplyr::filter
+gbx2_details <- npc.genes %>% 
+  filter( mgi_symbol =="Gbx2")
+
+rankZ <- function (x) {
+  x <- rank(x, na.last = "keep", ties.method = "average")/(sum(!is.na(x)) + 1)
+  qnorm(x)
+}
+
+# get expression
+gbx2_expr <- expr.npc_rna[,gbx2_details$ensembl_gene_id,drop=FALSE]
+
+# rankZ transform
+gbx2_exprZ <- apply( gbx2_expr, 2, rankZ)
+
+# eQTL scan using qtl2::scan1
+gbx2_qtl_scan <- scan1(
+  genoprobs = npc.probs, # genotype probabilities for DO mNPCs at each marker
+  pheno = gbx2_exprZ, # rankZ transformed expression of Gbx2
+  kinship = npc.kinship_loco, # kinship matrix for DO mNPCs
+  addcovar = npc.covar # covariate matrix (sexes) for DO mNPCs
+)
+```
+
+Now, I am going to plot our example based upon genetic mapping. This should give us results in centimorgans which is a unit of measure for the frequency of genetic recombination.
+
+```{r eQTL_plot_Gbx2_gmap}
+plot_scan1( gbx2_qtl_scan, gmap, main = "Gbx2 eQTL (genetic map)")
+```
+
+Now, I am going to plot our example based upon physical mapping. This should give us results in base pairs.
+
+```{r eQTL_plot_Gbx2_pmap}
+plot_scan1( gbx2_qtl_scan, pmap, main = "Gbx2 eQTL (physical map")
+```
+
+Based upon these plots, let's get the details for the eQTL peak on Chromosome 1.
+
+```{r}
+gbx2_peak <- find_peaks( gbx2_qtl_scan, gmap, threshold = 5)
+gbx2_peak
+```
+
+Now let's get a bit more information.
+
+```{r}
+#Scan for coefficients of chromosome 1.
+gbx2_1_scan <- scan1blup(
+  genoprobs = npc.probs[,"1"], # genotype probabilities for DO mNPCs at each marker
+  pheno = gbx2_exprZ, # rankZ transformed expression of Gbx2
+  kinship = npc.kinship_loco[["1"]], # kinship matrix for chr 1
+  addcovar = npc.covar, # covariate matrix (sexes) for DO mNPCs)
+)
+
+#Plotting the coefficients of chromsome 1.
+gbx2_1_plot <- plot_coefCC(scan1_output = gbx2_qtl_scan,
+  gbx2_1_scan,
+  map = gmap["1"],
+  bgcolor = "gray95",
+  legend = "topright"
+)
+```
