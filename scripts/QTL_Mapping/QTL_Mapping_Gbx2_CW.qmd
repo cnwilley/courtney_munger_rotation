@@ -2,6 +2,8 @@
 title: "QTL Mapping Gbx2"
 author: "Courtney  Willey"
 format: html
+html:
+  embed-resources: true
 editor: visual
 ---
 
@@ -95,7 +97,7 @@ plot_scan1( gbx2_qtl_scan, pmap, main = "Gbx2 eQTL (physical map")
 Based upon these plots, let's get the details for the eQTL peak on Chromosome 1.
 
 ```{r}
-gbx2_peak <- find_peaks( gbx2_qtl_scan, gmap, threshold = 5)
+gbx2_peak <- find_peaks( gbx2_qtl_scan, pmap, threshold = 5)
 gbx2_peak
 ```
 
@@ -117,4 +119,74 @@ gbx2_1_plot <- plot_coefCC(scan1_output = gbx2_qtl_scan,
   bgcolor = "gray95",
   legend = "topright"
 )
+```
+
+Let's mediate the eQTL peak for \*\*Gbx2\*\* on chromosome 1. We will use \`intermediate\` package first.
+
+```{r gbx2_intermediate}
+#target - gbx2_expr
+#mediator - expression of all genes in the NPC (npc.exprZ)
+#annotation - gene annotations for all the genes in the expression matrix used in mediator. 
+#covar - npc.covar
+#qtl.geno - genotype at the QTL peak. We need marker boundaries and then  we  can pull the genotype using qtl2::pull_genoprobpos function.
+gbx2_peak_chr1 <- gbx2_peak %>% # note the location is in bp
+  filter(chr == 1)
+
+gbx2_chr1_marker <- map_dat2 %>%
+  mutate(diff = abs(pos_bp - gbx2_peak_chr1$pos)) %>%
+  slice_min (diff)
+
+gbx2_chr1_geno <- pull_genoprobpos(
+  genoprobs = npc.probs,
+  # map = pmap,
+  # chr = 1
+  marker = gbx2_chr1_marker$marker
+)
+
+annotation <- npc.genes %>% 
+  mutate(id = ensembl_gene_id,
+          chr = gene_chr,
+          pos = (gene_start + gene_end)/2,
+          symbol = mgi_symbol) %>%
+  mutate(chr = case_when(chr == "MT"~"M",
+                         chr!= "MT"~chr)
+         )
+
+gbx2_mediation <- mediation.scan(target = gbx2_exprZ,
+                                 mediator = npc.exprZ,
+                                 annotation = annotation,
+                                 covar = npc.covar,
+                                 qtl.geno = gbx2_chr1_geno
+                                 )
+
+plot(gbx2_mediation)
+```
+
+```{r}
+gbx2_mediation %>%
+  slice_min(LOD, n = 5)
+```
+
+Let's run mediation with \`bmediatR\`
+
+```{r gbx2_mediation_bmediatr}
+# y = gbx2 expression
+# M = all gene expression
+# X = genotypes at the marker/loci
+# Z = covariates
+gbx2_bmediatr_scan <- bmediatR(
+  y = gbx2_exprZ,
+  M = npc.exprZ,
+  X = gbx2_chr1_geno,
+  Z = npc.covar,
+  ln_prior_c = "complete"
+)
+```
+
+```{r gbx2_plot_bmediatr_results}
+plot_posterior_bar(bmediatR_object = gbx2_bmediatr_scan,
+                   med_annot = annotation,
+                   mediator_id = gbx2_details$ensembl_gene_id,
+                   med_var = "ensembl_gene_id"
+                   )
 ```
