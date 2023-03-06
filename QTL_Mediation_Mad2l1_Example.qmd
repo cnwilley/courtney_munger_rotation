@@ -1,0 +1,102 @@
+---
+title: "QTL Mediation Mad2l1 Example"
+author: "Courtney Willey"
+format: html
+html:
+  embed-resources: true
+editor: visual
+---
+
+First, I will load my setup.
+
+```{r setup}
+# for data handling + plotting
+library(tidyverse)
+library(ggpubr)
+
+# for qtl mapping+ annotation + mediation
+library(qtl2)
+library(GenomicRanges)
+library(intermediate)
+library(bmediatR)
+
+# set relative path to Rstudio project
+library(here)
+
+# re-assign some functions explicitly
+select <- dplyr::select 
+rename <- dplyr::rename 
+summarise <- dplyr::summarise
+```
+
+Second, I will load my data.
+
+```{r load_data}
+load( here("data","DO_mNPC_data_for_Courtney_2023-03-01 (1).RData"))
+
+# mapping data
+load( here("data","DO_mNPC_paired_eQTL_forMapping.RData")) # has all objects needed for mapping
+```
+
+Example: \*\*Mad2l1\*\* distant eQTL on chromosome 1
+
+Next goal is to run mediation for distant peaks on chromosome 1 between 104395228 and 112253474.
+
+```{r get_peaks}
+
+Pign_details <- npc.genes %>%
+  filter(mgi_symbol=="Pign") 
+
+qtl_peaks <- peaks.npc_rna.wEffs %>%
+  filter(peak_chr == 1,
+         between(interp_bp_peak.npc_rna,104395228,112253474),
+         local.npc_rna == FALSE,
+         lod.npc_rna >= 7.5)
+```
+
+Let's run mediation with \`bmediatR\`
+
+```{r mad2l1_bmediatr}
+# create an empty list to store results
+results <- c()
+
+# create a for loop to run mediation with `bmediatR``
+for (i in 1:2){
+  gene_expression <- exprZ.npc_rna[ ,qtl_peaks$ensembl_gene_id[i]]
+  marker <- map_dat2 %>%
+    mutate(diff = abs(pos_bp - qtl_peaks$interp_bp_peak.npc_rna[i])) %>%
+    slice_min(diff)
+  genotype <- pull_genoprobpos(
+    genoprobs = probs.npc_rna,
+    marker = marker$marker
+    )
+  bmediatr_scan <- bmediatR(
+    y = gene_expression,
+    M = exprZ.npc_rna,
+    X = genotype,
+    Z = covar.npc_rna
+  )
+  results[[i]] <- bmediatr_scan
+}
+```
+
+```{r mad2l1_plot_bmediatr_results}
+annotation <- npc.genes %>% 
+  mutate(id = ensembl_gene_id,
+          chr = gene_chr,
+          pos = (gene_start + gene_end)/2,
+          symbol = mgi_symbol) %>%
+  mutate(chr = case_when(chr == "MT"~"M",
+                         chr!= "MT"~chr)
+         )
+
+plot_posterior_bar(bmediatR_object = results[[1]],
+                   med_annot = annotation,
+                   mediator_id = Pign_details$ensembl_gene_id,
+                   med_var = "ensembl_gene_id"
+                   )
+```
+
+```{r}
+exp(results[[1]]$ln_post_c)[Pign_details$ensembl_gene_id,]
+```
