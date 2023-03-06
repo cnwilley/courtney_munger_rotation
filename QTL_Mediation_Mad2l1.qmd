@@ -1,0 +1,173 @@
+---
+title: "QTL Mediation Mad2l1"
+author: "Courtney Willey"
+format: html
+html: 
+  embed-resources: true
+editor: visual
+---
+
+## 
+
+```{r setup}
+# for data handling + plotting
+library(tidyverse)
+library(ggpubr)
+
+# for qtl mapping+ annotation + mediation
+library(qtl2)
+library(GenomicRanges)
+library(intermediate)
+library(bmediatR)
+
+# set relative path to Rstudio project
+library(here)
+
+# re-assign some functions explicitly
+select <- dplyr::select 
+rename <- dplyr::rename 
+summarise <- dplyr::summarise
+```
+
+Load in data.
+
+```{r load_data}
+
+load( here("data","DO_mNPC_data_for_Courtney_2023-03-01 (1).RData"))
+```
+
+Example: \*\*Mad2l1\*\*
+
+```{r eQTL_mapping}
+# Get gene details usinge dplyr::filter
+mad2l1_details <- npc.genes %>% 
+  filter( mgi_symbol =="Mad2l1")
+
+rankZ <- function (x) {
+  x <- rank(x, na.last = "keep", ties.method = "average")/(sum(!is.na(x)) + 1)
+  qnorm(x)
+}
+
+# get expression
+mad2l1_expr <- expr.npc_rna[,mad2l1_details$ensembl_gene_id,drop=FALSE]
+
+# rankZ transform
+mad2l1_exprZ <- apply( mad2l1_expr, 2, rankZ)
+
+# eQTL scan using qtl2::scan1
+mad2l1_qtl_scan <- scan1(
+  genoprobs = npc.probs, # genotype probabilities for DO mNPCs at each marker
+  pheno = mad2l1_exprZ, # rankZ transformed expression of Gbx2
+  kinship = npc.kinship_loco, # kinship matrix for DO mNPCs
+  addcovar = npc.covar # covariate matrix (sexes) for DO mNPCs
+)
+```
+
+Now, I am going to plot our example based upon genetic mapping. This should give us results in centimorgans which is a unit of measure for the frequency of genetic recombination.
+
+```{r eQTL_plot_Mad2l1_gmap}
+plot_scan1( mad2l1_qtl_scan, gmap, main = "Mad2l1 eQTL (genetic map)")
+```
+
+Now, I am going to plot our example based upon physical mapping. This should give us results in base pairs.
+
+```{r eQTL_plot_Mas2l1_pmap}
+plot_scan1( mad2l1_qtl_scan, pmap, main = "Mad2l1 eQTL (physical map")
+```
+
+Based upon these plots, let's get the details for the eQTL peak on Chromosome 1.
+
+```{r}
+mad2l1_peak <- find_peaks(mad2l1_qtl_scan, pmap, threshold = 5)
+mad2l1_peak
+```
+
+Now let's get a bit more information.
+
+```{r}
+#Scan for coefficients of chromosome 1.
+mad2l1_1_scan <- scan1blup(
+  genoprobs = npc.probs[,"1"], # genotype probabilities for DO mNPCs at each marker
+  pheno = mad2l1_exprZ, # rankZ transformed expression of Mad2l1
+  kinship = npc.kinship_loco[["1"]], # kinship matrix for chr 1
+  addcovar = npc.covar, # covariate matrix (sexes) for DO mNPCs)
+)
+
+#Plotting the coefficients of chromsome 1.
+mad2l1_1_plot <- plot_coefCC(scan1_output = mad2l1_qtl_scan,
+  mad2l1_1_scan,
+  map = gmap["1"],
+  bgcolor = "gray95",
+  legend = "topright"
+)
+```
+
+Let's mediate the eQTL peak for \*\*Mad2l1\*\* on chromosome 1. We will use \`intermediate\` package first.
+
+```{r mad2l1_intermediate}
+#target - mad2l1_expr
+#mediator - expression of all genes in the NPC (npc.exprZ)
+#annotation - gene annotations for all the genes in the expression matrix used in mediator. 
+#covar - npc.covar
+#qtl.geno - genotype at the QTL peak. We need marker boundaries and then  we  can pull the genotype using qtl2::pull_genoprobpos function.
+mad2l1_peak_chr1 <- mad2l1_peak %>% # note the location is in bp
+  filter(chr == 1)
+
+mad2l1_chr1_marker <- map_dat2 %>%
+  mutate(diff = abs(pos_bp - mad2l1_peak_chr1$pos)) %>%
+  slice_min (diff)
+
+mad2l1_chr1_geno <- pull_genoprobpos(
+  genoprobs = npc.probs,
+  # map = pmap,
+  # chr = 1
+  marker = mad2l1_chr1_marker$marker
+)
+
+annotation <- npc.genes %>% 
+  mutate(id = ensembl_gene_id,
+          chr = gene_chr,
+          pos = (gene_start + gene_end)/2,
+          symbol = mgi_symbol) %>%
+  mutate(chr = case_when(chr == "MT"~"M",
+                         chr!= "MT"~chr)
+         )
+
+mad2l1_mediation <- mediation.scan(target = mad2l1_exprZ,
+                                 mediator = npc.exprZ,
+                                 annotation = annotation,
+                                 covar = npc.covar,
+                                 qtl.geno = mad2l1_chr1_geno
+                                 )
+
+plot(mad2l1_mediation)
+```
+
+```{r}
+mad2l1_mediation %>%
+  slice_min(LOD, n = 5)
+```
+
+Let's run mediation with \`bmediatR\`
+
+```{r mad2l1_mediation_bmediatr}
+# y = mad2l1 expression
+# M = all gene expression
+# X = genotypes at the marker/loci
+# Z = covariates
+mad2l1_bmediatr_scan <- bmediatR(
+  y = mad2l1_exprZ,
+  M = npc.exprZ,
+  X = mad2l1_chr1_geno,
+  Z = npc.covar,
+  ln_prior_c = "complete"
+)
+```
+
+```{r mad2l1_plot_bmediatr_results}
+plot_posterior_bar(bmediatR_object = mad2l1_bmediatr_scan,
+                   med_annot = annotation,
+                   mediator_id = mad2l1_details$ensembl_gene_id,
+                   med_var = "ensembl_gene_id"
+                   )
+```
