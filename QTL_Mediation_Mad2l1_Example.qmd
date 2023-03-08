@@ -10,6 +10,11 @@ editor: visual
 First, I will load my setup.
 
 ```{r setup}
+#install devtools
+#install.packages("devtools")
+#devtools::install_github("wesleycrouse/bmediatR", build_vignettes = TRUE)
+#devtools::install_github("simecek/intermediate")
+
 # for data handling + plotting
 library(tidyverse)
 library(ggpubr)
@@ -78,17 +83,19 @@ for (i in 1:nrow(qtl_peaks)){
   )
   results[[i]] <- bmediatr_scan
 }
+
+save(results, file = "bmediatr_results_Pign")
 ```
 
 ```{r plot_bmediatr_results}
-annotation <- npc.genes %>% 
-  mutate(id = ensembl_gene_id,
-          chr = gene_chr,
-          pos = (gene_start + gene_end)/2,
-          symbol = mgi_symbol) %>%
-  mutate(chr = case_when(chr == "MT"~"M",
-                         chr!= "MT"~chr)
-         )
+# annotation <- npc.genes %>% 
+#   mutate(id = ensembl_gene_id,
+#           chr = gene_chr,
+#           pos = (gene_start + gene_end)/2,
+#           symbol = mgi_symbol) %>%
+#   mutate(chr = case_when(chr == "MT"~"M",
+#                          chr!= "MT"~chr)
+#          )
 
 # plot Pign bmediatr results
 # for (i in 1:nrow(qtl_peaks)){
@@ -145,7 +152,8 @@ mediation_results %>%
       fill = mediation_type)+
   geom_point()+
   theme_pubclean( )+
-  theme(legend.position = "right")
+  theme(legend.position = "right")+
+  xlim(0,1)
 ```
 
 ```{r rownames}
@@ -200,19 +208,63 @@ for (i in 1:nrow(qtl_peaks)){
   )
   shared_results[[i]] <- bmediatr_scan
 }
+
+save(shared_results, file = "bmediatr_shared_results_Pign")
 ```
 
 ```{r plot_shared_bmediatr_results}
 # plot Pign bmediatr results for shared samples
-for (i in 1:nrow(qtl_peaks)){
-  plot_posterior_bar(
-    bmediatR_object = results[[1]],
-    med_annot = annotation,
-    mediator_id = Pign_details$ensembl_gene_id,
-    med_var = "ensembl_gene_id"
-  )}
+# for (i in 1:nrow(qtl_peaks)){
+#   plot_posterior_bar(
+#     bmediatR_object = results[[1]],
+#     med_annot = annotation,
+#     mediator_id = Pign_details$ensembl_gene_id,
+#     med_var = "ensembl_gene_id"
+#   )}
 ```
 
 ```{r shared_posterior_probabilities}
+shared_post_results <- c()
 
+for (i in 1:length(shared_results)) {
+  shared_post_results[[i]] <- exp(shared_results[[i]]$ln_post_c)[Pign_details$ensembl_gene_id,]
+}
+post_results[[i]]
+```
+
+```{r}
+mediation_results <- do.call(rbind, shared_post_results) %>% 
+  as_tibble() %>%
+  dplyr::rename(
+    ML1 = `0,0,0`,
+    ML2 = `0,1,0`,
+    ML3 = `1,0,0`,
+    complete_mediation = `1,1,0`,
+    ML5 = `0,0,1`,
+    ML6 = `0,1,1`,
+    co_local = `1,0,1`,
+    partial_mediation = `1,1,1`,
+    ML9 = `0,*,0`,
+    ML10 = `1,*,0`,
+    ML11 = `0,*,1`,
+    ML12 = `1,*,1`
+  ) %>% 
+  cbind( qtl_peaks 
+         ) %>% 
+  pivot_longer(ML1:ML12, names_to = "type", values_to = "prob") %>% 
+  mutate( mediation_type = case_when(
+    type %in% c("complete_mediation","co_local","partial_mediation")~type,
+    type %in% c(paste0("ML",seq(1:12)))~"other non-med"
+  ))
+
+mediation_results %>% 
+  ggplot()+
+  aes(x = prob,
+      y = mgi_symbol,
+      col = mediation_type,
+      fill = mediation_type)+
+  geom_point()+
+  theme_pubclean( )+
+  theme(legend.position = "right")+
+  xlim(0,1)
 ```
