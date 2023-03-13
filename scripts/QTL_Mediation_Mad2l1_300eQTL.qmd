@@ -1,0 +1,231 @@
+---
+title: "QTL Mediation Mad2l1 300eQTL"
+author: "Courtney Willey"
+format: html
+html:
+  embed-resources: true
+editor: visual
+---
+
+First, I will load my setup.
+
+```{r setup}
+# for data handling + plotting
+library(tidyverse)
+library(ggpubr)
+
+# for qtl mapping+ annotation + mediation
+library(qtl2)
+library(GenomicRanges)
+library(intermediate)
+library(bmediatR)
+
+# set relative path to Rstudio project
+library(here)
+
+# re-assign some functions explicitly
+select <- dplyr::select 
+rename <- dplyr::rename 
+summarise <- dplyr::summarise
+```
+
+Second, I will load my data.
+
+```{r load_data}
+load( here("data","DO_mNPC_data_for_Courtney_2023-03-01 (1).RData"))
+
+# mapping data
+load( here("data","DO_mNPC_paired_eQTL_forMapping.RData")) # has all objects needed for mapping
+```
+
+Example: \*\*Mad2l1\*\* distant eQTL on chromosome 1
+
+Next goal is to run mediation for distant peaks on chromosome 1 between 104395228 and 112253474.
+
+```{r get_peaks}
+# get Pign details and distant qtl peaks
+Pign_details <- npc.genes %>%
+  filter(mgi_symbol=="Pign") 
+
+qtl_peaks <- peaks.npc_rna.wEffs %>%
+  filter(peak_chr == 1,
+         between(interp_bp_peak.npc_rna,104395228,112253474),
+         local.npc_rna == FALSE,
+         lod.npc_rna >= 6)
+```
+
+```{r bmediatr}
+# create an empty list to store results
+results <- c()
+
+# create a for loop to run mediation with `bmediatR``
+for (i in 1:nrow(qtl_peaks)){
+  gene_expression <- exprZ.npc_rna[ ,qtl_peaks$ensembl_gene_id[i]]
+  marker <- map_dat2 %>%
+    mutate(diff = abs(pos_bp - qtl_peaks$interp_bp_peak.npc_rna[i])) %>%
+    slice_min(diff)
+  genotype <- pull_genoprobpos(
+    genoprobs = probs.npc_rna,
+    marker = marker$marker
+    )
+  bmediatr_scan <- bmediatR(
+    y = gene_expression,
+    M = exprZ.npc_rna,
+    X = genotype,
+    Z = covar.npc_rna
+  )
+  results[[i]] <- bmediatr_scan
+}
+```
+
+```{r posterior_probabilities}
+# find posterior probabilities for Pign mediation
+qtl_peaks$qtl_id <- seq(1:nrow(qtl_peaks))
+
+post_results <- c()
+
+for (i in 1:length(results)) {
+  post_results[[i]] <- exp(results[[i]]$ln_post_c)[Pign_details$ensembl_gene_id,]
+}
+post_results[[i]]
+```
+
+```{r plotting_results}
+mediation_results <- do.call(rbind, post_results) %>% 
+  as_tibble() %>%
+  dplyr::rename(
+    ML1 = `0,0,0`,
+    ML2 = `0,1,0`,
+    ML3 = `1,0,0`,
+    complete_mediation = `1,1,0`,
+    ML5 = `0,0,1`,
+    ML6 = `0,1,1`,
+    co_local = `1,0,1`,
+    partial_mediation = `1,1,1`,
+    ML9 = `0,*,0`,
+    ML10 = `1,*,0`,
+    ML11 = `0,*,1`,
+    ML12 = `1,*,1`
+  ) %>% 
+  cbind( qtl_peaks 
+         ) %>% 
+  pivot_longer(ML1:ML12, names_to = "type", values_to = "prob") %>% 
+  mutate( mediation_type = case_when(
+    type %in% c("complete_mediation","co_local","partial_mediation")~type,
+    type %in% c(paste0("ML",seq(1:12)))~"other non-med"
+  ))
+
+mediation_results %>% 
+  ggplot()+
+  aes(x = prob,
+      y = mgi_symbol,
+      col = mediation_type,
+      fill = mediation_type)+
+  geom_point()+
+  theme_pubclean( )+
+  theme(legend.position = "right")+
+  xlim(0,1)
+```
+
+Now, let's see if we can do this with ESC expression.
+
+We will use genotype probabilities in shared samples to get genotypes.
+
+```{r row_names}
+# get row names for both expression matrices
+row.names(exprZ.esc_rna)
+row.names(exprZ.npc_rna)
+
+# get the intersection of the  two row names list/arrays
+#merge(exprZ.esc_rna, exprZ.npc_rna, by="row.names")
+
+#cbind( exprZ.esc_rna [ intersect(rownames(exprZ.esc_rna), rownames(exprZ.npc_rna)), ] ,
+       #exprZ.npc_rna [ intersect(rownames(exprZ.esc_rna), rownames(exprZ.npc_rna)), ] )
+
+intersect(rownames(exprZ.esc_rna), rownames(exprZ.npc_rna))
+```
+
+```{r shared_samples}
+merged_samples <- merge(exprZ.esc_rna, exprZ.npc_rna, by="row.names")
+head(merged_samples)
+
+# get the list of shared samples
+# get the number of shared samples
+shared_samples <- intersect(rownames(exprZ.esc_rna), rownames(exprZ.npc_rna))
+shared_samples
+# there are 127 shared samples
+```
+
+```{r shared_bmediatr}
+# create an empty list to store results
+shared_results <- c()
+
+# create a for loop to run mediation with `bmediatR``
+for (i in 1:nrow(qtl_peaks)){
+  gene_expression <- exprZ.npc_rna[shared_samples,qtl_peaks$ensembl_gene_id[i]]
+  marker <- map_dat2 %>%
+    mutate(diff = abs(pos_bp - qtl_peaks$interp_bp_peak.npc_rna[i])) %>%
+    slice_min(diff)
+  mediator <- exprZ.esc_rna[shared_samples,,drop=FALSE]
+  genotype <- pull_genoprobpos(
+    genoprobs = probs.npc_rna[ind=shared_samples],
+    marker = marker$marker
+    )
+  bmediatr_scan <- bmediatR(
+    y = gene_expression,
+    M = mediator,
+    X = genotype,
+    Z = covar.npc_rna
+  )
+  shared_results[[i]] <- bmediatr_scan
+}
+```
+
+```{r shared_posterior_probabilities}
+# find shared posterior probabilities for Pign mediation
+qtl_peaks$qtl_id <- seq(1:nrow(qtl_peaks))
+
+shared_post_results <- c()
+
+for (i in 1:length(shared_results)) {
+  shared_post_results[[i]] <- exp(shared_results[[i]]$ln_post_c)[Pign_details$ensembl_gene_id,]
+}
+shared_post_results[[i]]
+```
+
+```{r plotting_shared_results}
+mediation_results <- do.call(rbind, shared_post_results) %>% 
+  as_tibble() %>%
+  dplyr::rename(
+    ML1 = `0,0,0`,
+    ML2 = `0,1,0`,
+    ML3 = `1,0,0`,
+    complete_mediation = `1,1,0`,
+    ML5 = `0,0,1`,
+    ML6 = `0,1,1`,
+    co_local = `1,0,1`,
+    partial_mediation = `1,1,1`,
+    ML9 = `0,*,0`,
+    ML10 = `1,*,0`,
+    ML11 = `0,*,1`,
+    ML12 = `1,*,1`
+  ) %>% 
+  cbind( qtl_peaks 
+         ) %>% 
+  pivot_longer(ML1:ML12, names_to = "type", values_to = "prob") %>% 
+  mutate( mediation_type = case_when(
+    type %in% c("complete_mediation","co_local","partial_mediation")~type,
+    type %in% c(paste0("ML",seq(1:12)))~"other non-med"
+  ))
+
+mediation_results %>% 
+  ggplot()+
+  aes(x = prob,
+      y = mgi_symbol,
+      col = mediation_type,
+      fill = mediation_type)+
+  geom_point()+
+  theme_pubclean( )+
+  theme(legend.position = "right")+
+  xlim(0,1)
+```
