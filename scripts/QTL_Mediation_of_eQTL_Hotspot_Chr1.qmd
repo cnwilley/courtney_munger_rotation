@@ -1,0 +1,310 @@
+---
+title: "QTL Mediation of eQTL Hotspot Ch1"
+author: "Courtney Willey"
+date: "`r Sys.Date()`"
+format: 
+  html:
+      self-contained: true
+      embed-resources: true
+---
+
+First, I will load my setup.
+
+```{r setup, results='hide', message=FALSE, warning=FALSE}
+# for data handling + plotting
+library(tidyverse)
+library(ggpubr)
+
+# for qtl mapping+ annotation + mediation
+library(qtl2)
+library(GenomicRanges)
+library(intermediate)
+library(bmediatR)
+
+# set relative path to Rstudio project
+library(here)
+
+# re-assign some functions explicitly
+select <- dplyr::select 
+rename <- dplyr::rename 
+summarise <- dplyr::summarise
+```
+
+Second, I will load my data.
+
+```{r load_data}
+load( here("data","DO_mNPC_data_for_Courtney_2023-03-01 (1).RData"))
+
+# mapping data
+load( here("data","DO_mNPC_paired_eQTL_forMapping.RData")) # has all objects needed for mapping
+```
+
+We are running mediation for distant peaks on chromosome 1 between 104395228 and 112253474.
+
+This is the eQTL hotspot on chromosome 1.
+
+```{r get_peaks}
+# get Pign details and distant qtl peaks
+Pign_details <- npc.genes %>%
+  filter(mgi_symbol=="Pign") 
+
+qtl_peaks <- peaks.npc_rna.wEffs %>%
+  filter(peak_chr == 1,
+         between(interp_bp_peak.npc_rna,104395228,112253474),
+         local.npc_rna == FALSE,
+         lod.npc_rna >= 6)
+```
+
+```{r bmediatr, eval=FALSE}
+# create an empty list to store results
+results <- c()
+
+# create a for loop to run mediation with `bmediatR``
+for (i in 1:nrow(qtl_peaks)){
+  gene_expression <- exprZ.npc_rna[ ,qtl_peaks$ensembl_gene_id[i]]
+  marker <- map_dat2 %>%
+    mutate(diff = abs(pos_bp - qtl_peaks$interp_bp_peak.npc_rna[i])) %>%
+    slice_min(diff)
+  genotype <- pull_genoprobpos(
+    genoprobs = probs.npc_rna,
+    marker = marker$marker
+    )
+  bmediatr_scan <- bmediatR(
+    y = gene_expression,
+    M = exprZ.npc_rna[,colnames(exprZ.npc_rna)!=qtl_peaks$ensembl_gene_id[i]],
+    X = genotype,
+    Z = covar.npc_rna
+  )
+  results[[i]] <- bmediatr_scan
+}
+
+save(results, file = here("data","bmediatr_results_Pign_300.RData"))
+```
+
+```{r posterior_probabilities}
+load( here("data","bmediatr_results_Pign_300.RData"))
+
+# find posterior probabilities for Pign mediation
+qtl_peaks$qtl_id <- seq(1:nrow(qtl_peaks))
+
+post_results <- c()
+
+for (i in 1:length(results)) {
+  post_results[[i]] <- exp(results[[i]]$ln_post_c)[Pign_details$ensembl_gene_id,]
+}
+post_results[[i]]
+```
+
+```{r plotting_results, fig.width=5, fig.height=10}
+mediation_results <- do.call(rbind, post_results) %>% 
+  as_tibble() %>%
+  dplyr::rename(
+    ML1 = `0,0,0`,
+    ML2 = `0,1,0`,
+    ML3 = `1,0,0`,
+    complete_mediation = `1,1,0`,
+    ML5 = `0,0,1`,
+    ML6 = `0,1,1`,
+    co_local = `1,0,1`,
+    partial_mediation = `1,1,1`,
+    ML9 = `0,*,0`,
+    ML10 = `1,*,0`,
+    ML11 = `0,*,1`,
+    ML12 = `1,*,1`
+  ) %>% 
+  cbind( qtl_peaks 
+         ) %>% 
+  pivot_longer(ML1:ML12, names_to = "type", values_to = "prob") %>% 
+  mutate( mediation_type = case_when(
+    type %in% c("complete_mediation","co_local","partial_mediation")~type,
+    type %in% c(paste0("ML",seq(1:12)))~"other non-med"
+  ))
+
+mediation_results %>% 
+  ggplot()+
+  aes(x = prob,
+      y = mgi_symbol,
+      col = mediation_type,
+      fill = mediation_type)+
+  geom_point()+
+  theme_pubclean( )+
+  theme(legend.position = "right",
+        axis.text.y = element_blank())+
+  xlim(0,1)+
+  xlab("Log Posterior Odds")+
+  ylab("")+
+  ggtitle("Mediation with Pign NPC Expression")
+```
+
+Let's obtain a list of the QTL that show partial or complete mediation with high probability.
+
+```{r qtl_list}
+# filter for complete and partial mediation with probabilities above or equal to 0.75.
+complete_partial_mediation = mediation_results %>%
+  filter(mediation_type %in% c("complete_mediation","partial_mediation"),
+         prob >= 0.75)
+
+# view the list
+complete_partial_mediation %>%
+  select(mgi_symbol,gene_chr,mediation_type,prob) %>%
+  arrange(mediation_type) %>%
+  print(n=50)
+```
+
+```{r plot_posterior_odds, eval=FALSE}
+# following fig6D
+# annotate dataset
+annotation <- npc.genes %>% 
+  mutate(id = ensembl_gene_id,
+          chr = gene_chr,
+          pos = (gene_start + gene_end)/2,
+          symbol = mgi_symbol,
+          middle = midpoint) %>%
+  mutate(chr = case_when(chr == "MT"~"M",
+                         chr!= "MT"~chr)
+        )
+
+# plot posterior odds
+plot_posterior_odds(results[[i]],
+                    med_annot = annotation,
+                    med_var = "ensembl_gene_id",
+                    col = "black", altcol = "gray", label_thresh = 10,
+                    main = "NPC Complete + Partial Mediation")
+
+# co-local posterior odds plot
+plot_posterior_odds(results[[i]], 
+                    med_annot = annotation,
+                    col = "skyblue", altcol = "gray", label_thresh = -50, label_thresh_greater_than = FALSE,
+                    model_type = "colocal",
+                    main = "NPC Co-local")
+```
+
+Now, let's see if we can do this with ESC expression.
+
+We will use genotype probabilities in shared samples to get genotypes.
+
+```{r shared_samples}
+merged_samples <- merge(exprZ.esc_rna, exprZ.npc_rna, by="row.names")
+#head(merged_samples)
+
+# get the list of shared samples
+# get the number of shared samples
+shared_samples <- intersect(rownames(exprZ.esc_rna), rownames(exprZ.npc_rna))
+#shared_samples
+# there are 127 shared samples
+```
+
+```{r shared_bmediatr, eval=FALSE}
+# create an empty list to store results
+shared_results <- c()
+
+# create a for loop to run mediation with `bmediatR``
+for (i in 1:nrow(qtl_peaks)){
+  gene_expression <- exprZ.npc_rna[shared_samples,qtl_peaks$ensembl_gene_id[i]]
+  marker <- map_dat2 %>%
+    mutate(diff = abs(pos_bp - qtl_peaks$interp_bp_peak.npc_rna[i])) %>%
+    slice_min(diff)
+  mediator <- exprZ.npc_rna[shared_samples,colnames(exprZ.npc_rna)!=qtl_peaks$ensembl_gene_id[i]]
+  genotype <- pull_genoprobpos(
+    genoprobs = probs.npc_rna[ind=shared_samples],
+    marker = marker$marker
+    )
+  bmediatr_scan <- bmediatR(
+    y = gene_expression,
+    M = mediator,
+    X = genotype,
+    Z = covar.npc_rna
+  )
+  shared_results[[i]] <- bmediatr_scan
+}
+
+save(shared_results, file = here("data","bmediatr_shared_results_Pign_300.RData"))
+```
+
+```{r shared_posterior_probabilities}
+load( here("data","bmediatr_shared_results_Pign_300.RData"))
+
+# find shared posterior probabilities for Pign mediation
+qtl_peaks$qtl_id <- seq(1:nrow(qtl_peaks))
+
+shared_post_results <- c()
+
+for (i in 1:length(shared_results)) {
+  shared_post_results[[i]] <- exp(shared_results[[i]]$ln_post_c)[Pign_details$ensembl_gene_id,]
+}
+shared_post_results[[i]]
+```
+
+```{r plotting_shared_results, fig.width=5, fig.height=10}
+shared_mediation_results <- do.call(rbind, shared_post_results) %>% 
+  as_tibble() %>%
+  dplyr::rename(
+    ML1 = `0,0,0`,
+    ML2 = `0,1,0`,
+    ML3 = `1,0,0`,
+    complete_mediation = `1,1,0`,
+    ML5 = `0,0,1`,
+    ML6 = `0,1,1`,
+    co_local = `1,0,1`,
+    partial_mediation = `1,1,1`,
+    ML9 = `0,*,0`,
+    ML10 = `1,*,0`,
+    ML11 = `0,*,1`,
+    ML12 = `1,*,1`
+  ) %>% 
+  cbind( qtl_peaks 
+         ) %>% 
+  pivot_longer(ML1:ML12, names_to = "type", values_to = "prob") %>% 
+  mutate( mediation_type = case_when(
+    type %in% c("complete_mediation","co_local","partial_mediation")~type,
+    type %in% c(paste0("ML",seq(1:12)))~"other non-med"
+  ))
+
+shared_mediation_results %>% 
+  ggplot()+
+  aes(x = prob,
+      y = mgi_symbol,
+      col = mediation_type,
+      fill = mediation_type)+
+  geom_point()+
+  theme_pubclean( )+
+   theme(legend.position = "right",
+        axis.text.y = element_blank())+
+  xlim(0,1)+
+  xlab("Log Posterior Odds")+
+  ylab("")+
+  ggtitle("Mediation with Pign ESC Expression")
+```
+
+```{r shared_qtl_list}
+# filter for shared complete and partial mediation with probabilities above or equal to 0.75.
+complete_partial_mediation_shared = shared_mediation_results %>%
+  filter(mediation_type %in% c("complete_mediation","partial_mediation"),
+         prob >= 0.75)
+
+# view the list
+complete_partial_mediation_shared %>%
+  select(mgi_symbol,gene_chr,mediation_type, prob) %>%
+  arrange(mediation_type) %>%
+  print(n=50)
+```
+
+```{r plot_shared_posterior_odds, eval=FALSE}
+# This did not work
+# following fig6D
+
+# plot posterior odds
+plot_posterior_odds(shared_results[[i]],
+                    med_annot = npc.genes$annotation %>%
+                    mutate(middle = start + (end - start)/2),
+                    col = "black", altcol = "gray", label_thresh = 10,
+                    main = "ESC Complete + Partial Mediation")
+
+# co-local posterior odds plot
+plot_posterior_odds(shared_results[[i]], 
+                    med_annot = npc.genes$annotation %>%
+                    mutate(middle = start + (end - start)/2),
+                    col = "skyblue", altcol = "gray", label_thresh = -50, label_thresh_greater_than = FALSE,
+                    model_type = "colocal",
+                    main = "ESC Co-local")
+```
