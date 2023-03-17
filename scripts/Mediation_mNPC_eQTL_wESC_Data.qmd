@@ -1,0 +1,140 @@
+---
+title: "Mediation of mNPC eQTL wESC Data"
+author: "Courtney Willey"
+date: "`r Sys.Date()`"
+format: 
+ html: 
+    self-contained: true
+    embed-resources: true
+---
+
+First, I will load my setup.
+
+```{r setup, results='hide', message=FALSE, warning=FALSE}
+#for data handling + plotting
+library(tidyverse)
+library(ggpubr)
+
+#for qtl mapping + annotation + mediation
+library(qtl2)
+library(GenomicRanges)
+library(intermediate)
+library(bmediatR)
+
+#set relative path to Rstudio project
+library(here)
+
+#re-assign some functions explicitly 
+select <- dplyr::select
+rename <- dplyr::rename
+summarise <- dplyr::summarise
+```
+
+Second, I will load my data.
+
+```{r load_data}
+#imported the .csv file and converted into a dataframe
+#readr::read_csv("DO_mNPC_eQTL_wESC_meds.csv")
+data <- data.frame(DO_mNPC_eQTL_wESC_meds)
+
+load( here("data","DO_mNPC_data_for_Courtney_2023-03-01 (1).RData"))
+
+# mapping data
+load( here("data","DO_mNPC_paired_eQTL_forMapping.RData")) # has all objects needed for mapping
+```
+
+Third, I will add some bp positions to my data.
+```{r}
+data %>%
+  left_join(
+    peaks.npc_rna.wEffs %>%
+      select( target.id = ensembl_gene_id,
+              qtl.chr = peak_chr,
+              interp_bp_peak.npc_rna)
+  )
+```
+
+We are running mediation for distant eQTL peaks.
+
+```{r bmediatr, eval=FALSE}
+#create an empty list to store results
+results <- c()
+
+#create a for loop to run mediation with `bmediatR`
+for(i in 1:nrow(data)){
+  gene_expression <- exprZ.esc_rna[,data$target.id[i]]
+  marker <- map_dat2 %>%
+       mutate(diff = abs(pos_bp - peaks.npc_rna.wEffs$interp_bp_peak.npc_rna[i])) %>%
+       slice_min(diff)
+  mediator <- exprZ.esc_rna[,colnames(exprZ.esc_rna) !=data$target.id[i]]
+  genotype <- pull_genoprobpos(
+    genoprobs = probs.npc_rna,
+    marker = marker$marker
+  )
+  bmediatr_scan <- bmediatR(
+    y = gene_expression,
+    M = exprZ.esc_rna[,colnames(exprZ.esc_rna)!=data$target.id[i]],
+    X = genotype, 
+    Z = covar.npc_rna
+  )
+  results[[i]] <- bmediatr_scan
+}
+
+save(results, file = here("data","bmediatr_results_mNPC_eQTL_wESC.RData"))
+```
+
+```{r posterior_probabilities}
+load( here("data","bmediatr_results_mNPC_eQTL_wESC.RData"))
+
+#find posterior probabilities 
+data$target.id <- seq(1:nrow(data))
+
+post_results <- c()
+
+for (i in 1:length(results)) {
+  post_results[[i]] <- exp(results[[i]]$ln_post_c)[data$target.id, ]
+}
+post_results[[i]]
+
+```
+
+```{r plotting_results, fig.width=5, fig.height=10}
+mediation_results <- do.call(rbind, post_results) %>%
+  as_tibble() %>%
+  dplyr::rename(
+    ML1 = `0,0,0`,
+    ML2 = `0,1,0`,
+    ML3 = `1,0,0`,
+    complete_mediation = `1,1,0`,
+    ML5 = `0,0,1`,
+    ML6 = `0,1,1`,
+    co_local = `1,0,1`,
+    partial_mediation = `1,1,1`,
+    ML9 = `0,*,0`,
+    ML10 = `1,*,0`,
+    ML11 = `0,*,1`,
+    ML12 = `1,*,1`
+  ) %>%
+  cbind( data
+         ) %>%
+  pivot_longer(ML1:ML12, names_to = "group", values_to = "prob") %>%
+  mutate( mediation_type = case_when(
+    group %in% c("complete_mediation","co_local","partial_mediation")~group,
+    group %in% c(paste0("ML",seq(1:12)))~"other non-med"
+  ))
+
+mediation_results %>%
+  ggplot()+
+  aes(x = prob,
+      y = target.id,
+      col = mediation_type,
+      fill = mediation_type)+
+  geom_point()+
+  theme_pubclean()+
+  theme(legend.position = "right",
+        axis.text.y = element_blank())+
+  xlim(0,1)+
+  xlab("Log Posterior Odds")+
+  ylab("")+
+  ggtitle("Mediation with mNPC eQTL wESC Expression")
+```
