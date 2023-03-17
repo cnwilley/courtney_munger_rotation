@@ -45,14 +45,14 @@ This is the eQTL hotspot on chromosome 1.
 
 ```{r get_peaks}
 # get Pign details and distant qtl peaks
-Pign_details <- npc.genes %>%
-  filter(mgi_symbol=="Pign") 
+ Pign_details <- npc.genes %>%
+   filter(mgi_symbol=="Pign") 
 
-qtl_peaks <- peaks.npc_rna.wEffs %>%
+ qtl_peaks <- peaks.npc_rna.wEffs %>%
   filter(peak_chr == 1,
-         between(interp_bp_peak.npc_rna,104395228,112253474),
-         local.npc_rna == FALSE,
-         lod.npc_rna >= 6)
+          between(interp_bp_peak.npc_rna,104395228,112253474),
+          local.npc_rna == FALSE,
+          lod.npc_rna >= 6)
 ```
 
 ```{r bmediatr, eval=FALSE}
@@ -64,7 +64,7 @@ for (i in 1:nrow(qtl_peaks)){
   gene_expression <- exprZ.npc_rna[ ,qtl_peaks$ensembl_gene_id[i]]
   marker <- map_dat2 %>%
     mutate(diff = abs(pos_bp - qtl_peaks$interp_bp_peak.npc_rna[i])) %>%
-    slice_min(diff)
+    slice_min(diff())
   genotype <- pull_genoprobpos(
     genoprobs = probs.npc_rna,
     marker = marker$marker
@@ -204,7 +204,7 @@ for (i in 1:nrow(qtl_peaks)){
   marker <- map_dat2 %>%
     mutate(diff = abs(pos_bp - qtl_peaks$interp_bp_peak.npc_rna[i])) %>%
     slice_min(diff)
-  mediator <- exprZ.npc_rna[shared_samples,colnames(exprZ.npc_rna)!=qtl_peaks$ensembl_gene_id[i]]
+  mediator <- exprZ.esc_rna[,colnames(exprZ.esc_rna)!=qtl_peaks$ensembl_gene_id[i]]
   genotype <- pull_genoprobpos(
     genoprobs = probs.npc_rna[ind=shared_samples],
     marker = marker$marker
